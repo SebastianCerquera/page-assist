@@ -1,11 +1,15 @@
 import {
   Book,
   BrainCircuit,
-  CircuitBoardIcon,
   Orbit,
-  Share
+  Share,
+  BlocksIcon,
+  InfoIcon
 } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { Link, useLocation } from "react-router-dom"
+import { OllamaIcon } from "../Icons/Ollama"
+import { Tag } from "antd"
 
 function classNames(...classes: string[]) {
   return classes.filter(Boolean).join(" ")
@@ -13,7 +17,7 @@ function classNames(...classes: string[]) {
 
 const LinkComponent = (item: {
   href: string
-  name: string
+  name: string | JSX.Element
   icon: any
   current: string
 }) => {
@@ -25,7 +29,7 @@ const LinkComponent = (item: {
           item.current === item.href
             ? "bg-gray-100 text-gray-600 dark:bg-[#262626] dark:text-white"
             : "text-gray-700 hover:text-gray-600 hover:bg-gray-100 dark:text-gray-200 dark:hover:text-white dark:hover:bg-[#262626]",
-          "group flex gap-x-3 rounded-md py-2 pl-2 pr-3 text-sm leading-6 font-semibold"
+          "group flex gap-x-3 rounded-md py-2 pl-2 pr-3 text-sm font-semibold"
         )}>
         <item.icon
           className={classNames(
@@ -44,42 +48,61 @@ const LinkComponent = (item: {
 
 export const SettingsLayout = ({ children }: { children: React.ReactNode }) => {
   const location = useLocation()
+  const { t } = useTranslation(["settings", "common"])
+
   return (
     <>
       <div className="mx-auto max-w-7xl lg:flex lg:gap-x-16 lg:px-8">
-        <aside className="flex lg:rounded-md bg-white lg:p-4 lg:mt-20 overflow-x-auto lg:border-0 border-b  py-4 lg:block lg:w-64 lg:flex-none  dark:bg-[#171717] dark:border-gray-600">
+        <aside className="flex lg:rounded-md bg-white lg:p-4 lg:mt-20 overflow-x-auto lg:border-0 border-b  py-4 lg:block lg:w-72 lg:flex-none  dark:bg-[#171717] dark:border-gray-600">
           <nav className="flex-none  px-4 sm:px-6 lg:px-0">
             <ul
               role="list"
               className="flex gap-x-3 gap-y-1 whitespace-nowrap lg:flex-col">
               <LinkComponent
                 href="/settings"
-                name="General Settings"
+                name={t("generalSettings.title")}
                 icon={Orbit}
                 current={location.pathname}
               />
               <LinkComponent
                 href="/settings/ollama"
-                name="Ollama Settings"
-                icon={CircuitBoardIcon}
+                name={t("ollamaSettings.title")}
+                icon={OllamaIcon}
                 current={location.pathname}
               />
               <LinkComponent
                 href="/settings/model"
-                name="Manage Model"
+                name={t("manageModels.title")}
                 current={location.pathname}
                 icon={BrainCircuit}
               />
               <LinkComponent
+                href="/settings/knowledge"
+                name={
+                  <div className="inline-flex items-center gap-2">
+                    {t("manageKnowledge.title")}
+                    <Tag color="yellow">{t("common:beta")}</Tag>
+                  </div>
+                }
+                icon={BlocksIcon}
+                current={location.pathname}
+              />
+              <LinkComponent
                 href="/settings/prompt"
-                name="Manage Prompt"
+                name={t("managePrompts.title")}
                 icon={Book}
                 current={location.pathname}
               />
-               <LinkComponent
+              <LinkComponent
                 href="/settings/share"
-                name="Manage Share"
+                name={t("manageShare.title")}
                 icon={Share}
+                current={location.pathname}
+              />
+              <LinkComponent
+                href="/settings/about"
+                name={t("about.title")}
+                icon={InfoIcon}
                 current={location.pathname}
               />
             </ul>

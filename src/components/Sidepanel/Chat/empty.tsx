@@ -2,16 +2,19 @@ import { useQuery } from "@tanstack/react-query"
 import { Select } from "antd"
 import { RotateCcw } from "lucide-react"
 import { useEffect, useState } from "react"
-import { useMessage } from "~hooks/useMessage"
+import { useTranslation } from "react-i18next"
+import { useMessage } from "~/hooks/useMessage"
 import {
   getAllModels,
   getOllamaURL,
   isOllamaRunning,
-  setOllamaURL as saveOllamaURL
-} from "~services/ollama"
+  setOllamaURL as saveOllamaURL,
+  fetchChatModels
+} from "~/services/ollama"
 
 export const EmptySidePanel = () => {
   const [ollamaURL, setOllamaURL] = useState<string>("")
+  const { t } = useTranslation(["playground", "common"])
   const {
     data: ollamaInfo,
     status: ollamaStatus,
@@ -22,7 +25,7 @@ export const EmptySidePanel = () => {
     queryFn: async () => {
       const ollamaURL = await getOllamaURL()
       const isOk = await isOllamaRunning()
-      const models = await getAllModels({ returnEmpty: false })
+      const models = await fetchChatModels({ returnEmpty: false })
 
       return {
         isOk,
@@ -38,7 +41,7 @@ export const EmptySidePanel = () => {
     }
   }, [ollamaInfo])
 
-  const { setSelectedModel, selectedModel, chatMode, setChatMode,  } =
+  const { setSelectedModel, selectedModel, chatMode, setChatMode } =
     useMessage()
 
   return (
@@ -48,7 +51,7 @@ export const EmptySidePanel = () => {
           <div className="inline-flex items-center space-x-2">
             <div className="w-3 h-3 bg-blue-500 rounded-full animate-bounce"></div>
             <p className="dark:text-gray-400 text-gray-900">
-              Searching for your Ollama 🦙
+              {t("ollamaState.searching")}
             </p>
           </div>
         )}
@@ -57,7 +60,7 @@ export const EmptySidePanel = () => {
             <div className="inline-flex  items-center space-x-2">
               <div className="w-3 h-3 bg-green-500 rounded-full"></div>
               <p className="dark:text-gray-400 text-gray-900">
-                Ollama is running 🦙
+                {t("ollamaState.running")}
               </p>
             </div>
           ) : (
@@ -65,7 +68,7 @@ export const EmptySidePanel = () => {
               <div className="inline-flex  space-x-2">
                 <div className="w-3 h-3 bg-red-500 rounded-full"></div>
                 <p className="dark:text-gray-400 text-gray-900">
-                  We couldn't find your Ollama 🦙
+                  {t("ollamaState.notRunning")}
                 </p>
               </div>
 
@@ -83,7 +86,7 @@ export const EmptySidePanel = () => {
                 }}
                 className="inline-flex mt-4 items-center rounded-md border border-transparent bg-black px-2 py-2 text-sm font-medium leading-4 text-white shadow-sm hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:bg-white dark:text-gray-800 dark:hover:bg-gray-100 dark:focus:ring-gray-500 dark:focus:ring-offset-gray-100 disabled:opacity-50 ">
                 <RotateCcw className="h-4 w-4 mr-3" />
-                Retry
+                {t("common:retry")}
               </button>
             </div>
           )
@@ -91,11 +94,10 @@ export const EmptySidePanel = () => {
 
         {ollamaStatus === "success" && ollamaInfo.isOk && (
           <div className="mt-4">
-            <p className="dark:text-gray-400 text-gray-900">Models:</p>
-
             <Select
               onChange={(e) => {
                 setSelectedModel(e)
+                localStorage.setItem("selectedModel", e)
               }}
               value={selectedModel}
               size="large"
@@ -104,7 +106,7 @@ export const EmptySidePanel = () => {
                 option.value.toLowerCase().indexOf(input.toLowerCase()) >= 0
               }
               showSearch
-              placeholder="Select a model"
+              placeholder={t("common:selectAModel")}
               style={{ width: "100%" }}
               className="mt-4"
               options={ollamaInfo.models?.map((model) => ({
@@ -134,18 +136,18 @@ export const EmptySidePanel = () => {
                       viewBox="0 0 20 20"
                       fill="currentColor"
                       stroke="currentColor"
-                      stroke-width="1">
+                      strokeWidth="1">
                       <path
-                        fill-rule="evenodd"
+                        fillRule="evenodd"
                         d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                        clip-rule="evenodd"></path>
+                        clipRule="evenodd"></path>
                     </svg>
                   </span>
                 </label>
                 <label
                   className="mt-px font-light  cursor-pointer select-none text-gray-900 dark:text-gray-400"
                   htmlFor="check">
-                  Chat with Current Page
+                  {t("common:chatWithCurrentPage")}
                 </label>
               </div>
             </div>

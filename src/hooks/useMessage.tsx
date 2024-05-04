@@ -1,96 +1,44 @@
 import React from "react"
-import { cleanUrl } from "~libs/clean-url"
+import { cleanUrl } from "~/libs/clean-url"
 import {
-  defaultEmbeddingChunkOverlap,
-  defaultEmbeddingChunkSize,
   defaultEmbeddingModelForRag,
   getOllamaURL,
   promptForRag,
   systemPromptForNonRag
-} from "~services/ollama"
-import { useStoreMessage, type ChatHistory, type Message } from "~store"
+} from "~/services/ollama"
+import { type Message } from "~/store/option"
+import { useStoreMessage } from "~/store"
 import { ChatOllama } from "@langchain/community/chat_models/ollama"
-import {
-  HumanMessage,
-  AIMessage,
-  type MessageContent,
-  SystemMessage
-} from "@langchain/core/messages"
-import { getHtmlOfCurrentTab } from "~libs/get-html"
-import { PageAssistHtmlLoader } from "~loader/html"
-import { RecursiveCharacterTextSplitter } from "langchain/text_splitter"
+import { HumanMessage, SystemMessage } from "@langchain/core/messages"
+import { getDataFromCurrentTab } from "~/libs/get-html"
 import { OllamaEmbeddings } from "@langchain/community/embeddings/ollama"
-import {
-  createChatWithWebsiteChain,
-  groupMessagesByConversation
-} from "~chain/chat-with-website"
 import { MemoryVectorStore } from "langchain/vectorstores/memory"
-import { chromeRunTime } from "~libs/runtime"
-export type BotResponse = {
-  bot: {
-    text: string
-    sourceDocuments: any[]
-  }
-  history: ChatHistory
-  history_id: string
-}
-
-const generateHistory = (
-  messages: {
-    role: "user" | "assistant" | "system"
-    content: string
-    image?: string
-  }[]
-) => {
-  let history = []
-  for (const message of messages) {
-    if (message.role === "user") {
-      let content: MessageContent = [
-        {
-          type: "text",
-          text: message.content
-        }
-      ]
-
-      if (message.image) {
-        content = [
-          {
-            type: "image_url",
-            image_url: message.image
-          },
-          {
-            type: "text",
-            text: message.content
-          }
-        ]
-      }
-      history.push(
-        new HumanMessage({
-          content: content
-        })
-      )
-    } else if (message.role === "assistant") {
-      history.push(
-        new AIMessage({
-          content: [
-            {
-              type: "text",
-              text: message.content
-            }
-          ]
-        })
-      )
-    }
-  }
-  return history
-}
+import { memoryEmbedding } from "@/utils/memory-embeddings"
+import { ChatHistory } from "@/store/option"
+import { generateID } from "@/db"
+import { saveMessageOnError, saveMessageOnSuccess } from "./chat-helper"
+import { notification } from "antd"
+import { useTranslation } from "react-i18next"
+import { usePageAssist } from "@/context"
+import { formatDocs } from "@/chain/chat-with-x"
+import { OllamaEmbeddingsPageAssist } from "@/models/OllamaEmbedding"
+import { useStorage } from "@plasmohq/storage/hook"
 
 export const useMessage = () => {
   const {
-    history,
+    controller: abortController,
+    setController: setAbortController,
     messages,
-    setHistory,
     setMessages,
+    embeddingController,
+    setEmbeddingController
+  } = usePageAssist()
+  const { t } = useTranslation("option")
+  const [selectedModel, setSelectedModel] = useStorage("selectedModel")
+
+  const {
+    history,
+    setHistory,
     setStreaming,
     streaming,
     setIsFirstMessage,
@@ -100,8 +48,6 @@ export const useMessage = () => {
     setIsLoading,
     isProcessing,
     setIsProcessing,
-    selectedModel,
-    setSelectedModel,
     chatMode,
     setChatMode,
     setIsEmbedding,
@@ -111,8 +57,6 @@ export const useMessage = () => {
     currentURL,
     setCurrentURL
   } = useStoreMessage()
-
-  const abortControllerRef = React.useRef<AbortController | null>(null)
 
   const [keepTrackOfEmbedding, setKeepTrackOfEmbedding] = React.useState<{
     [key: string]: MemoryVectorStore
@@ -129,203 +73,307 @@ export const useMessage = () => {
     setStreaming(false)
   }
 
-  const memoryEmbedding = async (
-    url: string,
-    html: string,
-    ollamaEmbedding: OllamaEmbeddings
+  const chatWithWebsiteMode = async (
+    message: string,
+    image: string,
+    isRegenerate: boolean,
+    messages: Message[],
+    history: ChatHistory,
+    signal: AbortSignal,
+    embeddingSignal: AbortSignal
   ) => {
-    const loader = new PageAssistHtmlLoader({
-      html,
-      url
-    })
-    const docs = await loader.load()
-    const chunkSize = await defaultEmbeddingChunkSize()
-    const chunkOverlap = await defaultEmbeddingChunkOverlap()
-    const textSplitter = new RecursiveCharacterTextSplitter({
-      chunkSize,
-      chunkOverlap
+    setStreaming(true)
+    const url = await getOllamaURL()
+
+    const ollama = new ChatOllama({
+      model: selectedModel!,
+      baseUrl: cleanUrl(url)
     })
 
-    const chunks = await textSplitter.splitDocuments(docs)
+    let newMessage: Message[] = []
+    let generateMessageId = generateID()
 
-    const store = new MemoryVectorStore(ollamaEmbedding)
-
-    setIsEmbedding(true)
-
-    await store.addDocuments(chunks)
-    setKeepTrackOfEmbedding({
-      ...keepTrackOfEmbedding,
-      [url]: store
-    })
-    setIsEmbedding(false)
-
-    return store
-  }
-
-  const chatWithWebsiteMode = async (message: string) => {
-    try {
-      let isAlreadyExistEmbedding: MemoryVectorStore
-      let embedURL: string, embedHTML: string
-      if (messages.length === 0) {
-        const { html, url } = await getHtmlOfCurrentTab()
-        embedHTML = html
-        embedURL = url
-        setCurrentURL(url)
-        isAlreadyExistEmbedding = keepTrackOfEmbedding[currentURL]
-      } else {
-        isAlreadyExistEmbedding = keepTrackOfEmbedding[currentURL]
-        embedURL = currentURL
-      }
-      let newMessage: Message[] = [
+    if (!isRegenerate) {
+      newMessage = [
         ...messages,
         {
           isBot: false,
           name: "You",
           message,
-          sources: []
+          sources: [],
+          images: []
         },
         {
           isBot: true,
           name: selectedModel,
           message: "▋",
-          sources: []
+          sources: [],
+          id: generateMessageId
         }
       ]
+    } else {
+      newMessage = [
+        ...messages,
+        {
+          isBot: true,
+          name: selectedModel,
+          message: "▋",
+          sources: [],
+          id: generateMessageId
+        }
+      ]
+    }
+    setMessages(newMessage)
+    let fullText = ""
+    let contentToSave = ""
+    let isAlreadyExistEmbedding: MemoryVectorStore
+    let embedURL: string, embedHTML: string, embedType: string
+    let embedPDF: { content: string; page: number }[] = []
 
-      const appendingIndex = newMessage.length - 1
-      setMessages(newMessage)
-      const ollamaUrl = await getOllamaURL()
-      const embeddingModle = await defaultEmbeddingModelForRag()
+    if (messages.length === 0) {
+      const { content: html, url, type, pdf } = await getDataFromCurrentTab()
+      embedHTML = html
+      embedURL = url
+      embedType = type
+      embedPDF = pdf
+      setCurrentURL(url)
+      isAlreadyExistEmbedding = keepTrackOfEmbedding[currentURL]
+    } else {
+      isAlreadyExistEmbedding = keepTrackOfEmbedding[currentURL]
+      embedURL = currentURL
+    }
 
-      const ollamaEmbedding = new OllamaEmbeddings({
-        model: embeddingModle || selectedModel,
-        baseUrl: cleanUrl(ollamaUrl)
-      })
+    setMessages(newMessage)
+    const ollamaUrl = await getOllamaURL()
+    const embeddingModle = await defaultEmbeddingModelForRag()
 
-      const ollamaChat = new ChatOllama({
-        model: selectedModel,
-        baseUrl: cleanUrl(ollamaUrl)
-      })
+    const ollamaEmbedding = new OllamaEmbeddingsPageAssist({
+      model: embeddingModle || selectedModel,
+      baseUrl: cleanUrl(ollamaUrl),
+      signal: embeddingSignal
+    })
+    let vectorstore: MemoryVectorStore
 
-      let vectorstore: MemoryVectorStore
-
+    try {
       if (isAlreadyExistEmbedding) {
         vectorstore = isAlreadyExistEmbedding
       } else {
-        vectorstore = await memoryEmbedding(
-          embedURL,
-          embedHTML,
-          ollamaEmbedding
-        )
+        vectorstore = await memoryEmbedding({
+          html: embedHTML,
+          keepTrackOfEmbedding: keepTrackOfEmbedding,
+          ollamaEmbedding: ollamaEmbedding,
+          pdf: embedPDF,
+          setIsEmbedding: setIsEmbedding,
+          setKeepTrackOfEmbedding: setKeepTrackOfEmbedding,
+          type: embedType,
+          url: embedURL
+        })
       }
-
+      let query = message
       const { ragPrompt: systemPrompt, ragQuestionPrompt: questionPrompt } =
         await promptForRag()
-
-      const sanitizedQuestion = message.trim().replaceAll("\n", " ")
-
-      const chain = createChatWithWebsiteChain({
-        llm: ollamaChat,
-        question_llm: ollamaChat,
-        question_template: questionPrompt,
-        response_template: systemPrompt,
-        retriever: vectorstore.asRetriever()
-      })
-
-      const chunks = await chain.stream({
-        question: sanitizedQuestion,
-        chat_history: groupMessagesByConversation(history)
-      })
-      let count = 0
-      for await (const chunk of chunks) {
-        if (count === 0) {
-          setIsProcessing(true)
-          newMessage[appendingIndex].message = chunk + "▋"
-          setMessages(newMessage)
-        } else {
-          newMessage[appendingIndex].message =
-            newMessage[appendingIndex].message.slice(0, -1) + chunk + "▋"
-          setMessages(newMessage)
-        }
-
-        count++
+      if (newMessage.length > 2) {
+        const lastTenMessages = newMessage.slice(-10)
+        lastTenMessages.pop()
+        const chat_history = lastTenMessages
+          .map((message) => {
+            return `${message.isBot ? "Assistant: " : "Human: "}${message.message}`
+          })
+          .join("\n")
+        const promptForQuestion = questionPrompt
+          .replaceAll("{chat_history}", chat_history)
+          .replaceAll("{question}", message)
+        const questionOllama = new ChatOllama({
+          model: selectedModel!,
+          baseUrl: cleanUrl(url)
+        })
+        const response = await questionOllama.invoke(promptForQuestion)
+        query = response.content.toString()
       }
 
-      newMessage[appendingIndex].message = newMessage[
-        appendingIndex
-      ].message.slice(0, -1)
+      const docs = await vectorstore.similaritySearch(query, 4)
+      const context = formatDocs(docs)
+      const source = docs.map((doc) => {
+        return {
+          ...doc,
+          name: doc?.metadata?.source || "untitled",
+          type: doc?.metadata?.type || "unknown",
+          mode: "chat",
+          url: ""
+        }
+      })
+     // message = message.trim().replaceAll("\n", " ")
+
+      let humanMessage = new HumanMessage({
+        content: [
+          {
+            text: systemPrompt
+              .replace("{context}", context)
+              .replace("{question}", message),
+            type: "text"
+          }
+        ]
+      })
+
+      const applicationChatHistory = generateHistory(history)
+
+      const chunks = await ollama.stream(
+        [...applicationChatHistory, humanMessage],
+        {
+          signal: signal
+        }
+      )
+      let count = 0
+      for await (const chunk of chunks) {
+        contentToSave += chunk.content
+        fullText += chunk.content
+        if (count === 0) {
+          setIsProcessing(true)
+        }
+        setMessages((prev) => {
+          return prev.map((message) => {
+            if (message.id === generateMessageId) {
+              return {
+                ...message,
+                message: fullText.slice(0, -1) + "▋"
+              }
+            }
+            return message
+          })
+        })
+        count++
+      }
+      // update the message with the full text
+      setMessages((prev) => {
+        return prev.map((message) => {
+          if (message.id === generateMessageId) {
+            return {
+              ...message,
+              message: fullText,
+              sources: source
+            }
+          }
+          return message
+        })
+      })
 
       setHistory([
         ...history,
         {
           role: "user",
-          content: message
+          content: message,
+          image
         },
         {
           role: "assistant",
-          content: newMessage[appendingIndex].message
+          content: fullText
         }
       ])
 
-      setIsProcessing(false)
-    } catch (e) {
+      await saveMessageOnSuccess({
+        historyId,
+        setHistoryId,
+        isRegenerate,
+        selectedModel: selectedModel,
+        message,
+        image,
+        fullText,
+        source
+      })
+
       setIsProcessing(false)
       setStreaming(false)
+    } catch (e) {
+      const errorSave = await saveMessageOnError({
+        e,
+        botMessage: fullText,
+        history,
+        historyId,
+        image,
+        selectedModel,
+        setHistory,
+        setHistoryId,
+        userMessage: message,
+        isRegenerating: isRegenerate
+      })
 
-      setMessages([
-        ...messages,
-        {
-          isBot: true,
-          name: selectedModel,
-          message: `Error in chat with website mode. Check out the following logs:
-          
-~~~
-${e?.message}
- ~~~
-        `,
-          sources: []
-        }
-      ])
+      if (!errorSave) {
+        notification.error({
+          message: t("error"),
+          description: e?.message || t("somethingWentWrong")
+        })
+      }
+      setIsProcessing(false)
+      setStreaming(false)
+      setIsProcessing(false)
+      setStreaming(false)
+      setIsEmbedding(false)
+    } finally {
+      setAbortController(null)
+      setEmbeddingController(null)
     }
   }
 
-  const normalChatMode = async (message: string, image: string) => {
+  const normalChatMode = async (
+    message: string,
+    image: string,
+    isRegenerate: boolean,
+    messages: Message[],
+    history: ChatHistory,
+    signal: AbortSignal
+  ) => {
+    setStreaming(true)
     const url = await getOllamaURL()
 
     if (image.length > 0) {
       image = `data:image/jpeg;base64,${image.split(",")[1]}`
     }
-    abortControllerRef.current = new AbortController()
 
     const ollama = new ChatOllama({
-      model: selectedModel,
-      baseUrl: cleanUrl(url)
+      model: selectedModel!,
+      baseUrl: cleanUrl(url),
+      verbose: true
     })
 
-    let newMessage: Message[] = [
-      ...messages,
-      {
-        isBot: false,
-        name: "You",
-        message,
-        sources: [],
-        images: [image]
-      },
-      {
-        isBot: true,
-        name: selectedModel,
-        message: "▋",
-        sources: []
-      }
-    ]
+    let newMessage: Message[] = []
+    let generateMessageId = generateID()
 
-    const appendingIndex = newMessage.length - 1
+    if (!isRegenerate) {
+      newMessage = [
+        ...messages,
+        {
+          isBot: false,
+          name: "You",
+          message,
+          sources: [],
+          images: [image]
+        },
+        {
+          isBot: true,
+          name: selectedModel,
+          message: "▋",
+          sources: [],
+          id: generateMessageId
+        }
+      ]
+    } else {
+      newMessage = [
+        ...messages,
+        {
+          isBot: true,
+          name: selectedModel,
+          message: "▋",
+          sources: [],
+          id: generateMessageId
+        }
+      ]
+    }
     setMessages(newMessage)
+    let fullText = ""
+    let contentToSave = ""
 
     try {
       const prompt = await systemPromptForNonRag()
-
-      message = message.trim().replaceAll("\n", " ")
 
       let humanMessage = new HumanMessage({
         content: [
@@ -368,29 +416,41 @@ ${e?.message}
       const chunks = await ollama.stream(
         [...applicationChatHistory, humanMessage],
         {
-          signal: abortControllerRef.current.signal
+          signal: signal
         }
       )
       let count = 0
       for await (const chunk of chunks) {
+        contentToSave += chunk.content
+        fullText += chunk.content
         if (count === 0) {
           setIsProcessing(true)
-          newMessage[appendingIndex].message = chunk.content + "▋"
-          setMessages(newMessage)
-        } else {
-          newMessage[appendingIndex].message =
-            newMessage[appendingIndex].message.slice(0, -1) +
-            chunk.content +
-            "▋"
-          setMessages(newMessage)
         }
-
+        setMessages((prev) => {
+          return prev.map((message) => {
+            if (message.id === generateMessageId) {
+              return {
+                ...message,
+                message: fullText.slice(0, -1) + "▋"
+              }
+            }
+            return message
+          })
+        })
         count++
       }
 
-      newMessage[appendingIndex].message = newMessage[
-        appendingIndex
-      ].message.slice(0, -1)
+      setMessages((prev) => {
+        return prev.map((message) => {
+          if (message.id === generateMessageId) {
+            return {
+              ...message,
+              message: fullText.slice(0, -1)
+            }
+          }
+          return message
+        })
+      })
 
       setHistory([
         ...history,
@@ -401,28 +461,49 @@ ${e?.message}
         },
         {
           role: "assistant",
-          content: newMessage[appendingIndex].message
+          content: fullText
         }
       ])
 
-      setIsProcessing(false)
-    } catch (e) {
+      await saveMessageOnSuccess({
+        historyId,
+        setHistoryId,
+        isRegenerate,
+        selectedModel: selectedModel,
+        message,
+        image,
+        fullText,
+        source: []
+      })
+
       setIsProcessing(false)
       setStreaming(false)
+      setIsProcessing(false)
+      setStreaming(false)
+    } catch (e) {
+      const errorSave = await saveMessageOnError({
+        e,
+        botMessage: fullText,
+        history,
+        historyId,
+        image,
+        selectedModel,
+        setHistory,
+        setHistoryId,
+        userMessage: message,
+        isRegenerating: isRegenerate
+      })
 
-      setMessages([
-        ...messages,
-        {
-          isBot: true,
-          name: selectedModel,
-          message: `Something went wrong. Check out the following logs:
-        \`\`\`
-        ${e?.message}
-        \`\`\`
-        `,
-          sources: []
-        }
-      ])
+      if (!errorSave) {
+        notification.error({
+          message: t("error"),
+          description: e?.message || t("somethingWentWrong")
+        })
+      }
+      setIsProcessing(false)
+      setStreaming(false)
+    } finally {
+      setAbortController(null)
     }
   }
 
@@ -433,20 +514,40 @@ ${e?.message}
     message: string
     image: string
   }) => {
+    const newController = new AbortController()
+    let signal = newController.signal
+    setAbortController(newController)
+
     if (chatMode === "normal") {
-      await normalChatMode(message, image)
+      await normalChatMode(message, image, false, messages, history, signal)
     } else {
-      await chatWithWebsiteMode(message)
+      const newEmbeddingController = new AbortController()
+      let embeddingSignal = newEmbeddingController.signal
+      setEmbeddingController(newEmbeddingController)
+      await chatWithWebsiteMode(
+        message,
+        image,
+        false,
+        messages,
+        history,
+        signal,
+        embeddingSignal
+      )
     }
   }
 
   const stopStreamingRequest = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
+    if (isEmbedding) {
+      if (embeddingController) {
+        embeddingController.abort()
+        setEmbeddingController(null)
+      }
+    }
+    if (abortController) {
+      abortController.abort()
+      setAbortController(null)
     }
   }
-
   return {
     messages,
     setMessages,

@@ -1,31 +1,22 @@
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter"
 import remarkGfm from "remark-gfm"
 import { nightOwl } from "react-syntax-highlighter/dist/cjs/styles/prism"
-import rehypeMathjax from "rehype-mathjax"
 import remarkMath from "remark-math"
 import ReactMarkdown from "react-markdown"
 import "property-information"
 import React from "react"
 import { Tooltip } from "antd"
 import { CheckIcon, ClipboardIcon } from "lucide-react"
+import { useTranslation } from "react-i18next"
 
 export default function Markdown({ message }: { message: string }) {
   const [isBtnPressed, setIsBtnPressed] = React.useState(false)
-
-  React.useEffect(() => {
-    if (isBtnPressed) {
-      setTimeout(() => {
-        setIsBtnPressed(false)
-      }, 4000)
-    }
-  }, [isBtnPressed])
-
+  const { t } = useTranslation("common")
   return (
     <React.Fragment>
       <ReactMarkdown
         className="prose break-words dark:prose-invert prose-p:leading-relaxed prose-pre:p-0 dark:prose-dark"
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeMathjax]}
         components={{
           code({ node, inline, className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || "")
@@ -37,11 +28,14 @@ export default function Markdown({ message }: { message: string }) {
                   </span>
 
                   <div className="flex items-center">
-                    <Tooltip title="Copy to clipboard">
+                    <Tooltip title={t("copyToClipboard")}>
                       <button
                         onClick={() => {
                           navigator.clipboard.writeText(children[0] as string)
                           setIsBtnPressed(true)
+                          setTimeout(() => {
+                            setIsBtnPressed(false)
+                          }, 4000)
                         }}
                         className="flex gap-1.5 items-center rounded bg-none p-1 text-xs text-gray-200 hover:bg-gray-700 hover:text-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 focus:ring-offset-gray-100">
                         {!isBtnPressed ? (
